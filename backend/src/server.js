@@ -150,10 +150,31 @@ app.use('*', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 URL Scraper Backend running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🔗 API info: http://localhost:${PORT}/api`);
+  
+  // Auto-start scraper on server startup (can be disabled with AUTO_START_SCRAPER=false)
+  const autoStartScraper = process.env.AUTO_START_SCRAPER !== 'false';
+  
+  if (autoStartScraper) {
+    console.log('🔄 Auto-starting scraper...');
+    try {
+      const scraper = new ScraperService();
+      scraper.runScrape()
+        .then(() => {
+          console.log('✅ Auto-scraper completed successfully');
+        })
+        .catch((error) => {
+          console.error('❌ Auto-scraper failed:', error);
+        });
+    } catch (error) {
+      console.error('❌ Failed to start auto-scraper:', error);
+    }
+  } else {
+    console.log('⏸️  Auto-start scraper disabled (set AUTO_START_SCRAPER=true to enable)');
+  }
 });
 
 module.exports = app;

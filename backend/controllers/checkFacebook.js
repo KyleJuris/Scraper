@@ -1,16 +1,23 @@
 /**
- * Facebook scraping logic using Playwright.
- * We aim to extract a number like "0 results".
+ * Facebook (Meta Ad Library) scraping with Playwright.
+ * Robustly extracts counts like: "~2,900 results", "0 results", "37 results".
+ * Adds explicit timing/waits and scans multiple candidate nodes, picking the best number.
  */
 
-async function randomHumanPause(page, min = 200, max = 900) {
+async function randomHumanPause(page, min = 250, max = 900) {
   await page.waitForTimeout(min + Math.floor(Math.random() * (max - min)));
 }
 
+/** Extract the first integer from "... results" (handles "~", commas). */
 function extractFirstNumberFromResults(text) {
   if (!text) return null;
-  const m = text.replace(/,/g, '').match(/(\d+)\s*results?/i);
-  return m ? parseInt(m[1], 10) : null;
+  // Normalize: remove non-breaking spaces, trim, and allow leading "~"
+  const cleaned = text.replace(/\u00a0/g, ' ').trim();
+  // Match: optional "~", digits with optional commas, followed by "result" or "results"
+  const m = cleaned.match(/~?\s*([\d,]+)\s*results?/i);
+  if (!m) return null;
+  const n = parseInt(m[1].replace(/,/g, ''), 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 async function checkFacebook(page, url) {
@@ -18,48 +25,74 @@ async function checkFacebook(page, url) {
   let status = 'failed'; // default is NOT success
 
   try {
+    // Slightly human-ish environment
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
-    await page.setViewportSize({ width: 1366 + Math.floor(Math.random()*120), height: 900 + Math.floor(Math.random()*100) });
+    await page.setViewportSize({
+      width: 1366 + Math.floor(Math.random() * 120),
+      height: 900 + Math.floor(Math.random() * 120)
+    });
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await randomHumanPause(page, 600, 1600);
+    // Load & give the app time to render client-side UI
+    console.log(`[Facebook] Navigating to: ${url}`);
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 90000 });
+    await randomHumanPause(page, 800, 1600);
 
-    await page.mouse.wheel(0, 600 + Math.floor(Math.random()*400));
-    await randomHumanPause(page, 400, 900);
+    // Light scroll to trigger lazy rendering
+    await page.mouse.wheel(0, 600 + Math.floor(Math.random() * 600));
+    await randomHumanPause(page, 400, 1000);
 
-    // A) role=heading with "results"
-    const heading = page.locator('role=heading').filter({ hasText: /results?/i });
-    if (await heading.count()) {
-      const text = (await heading.first().innerText()).trim();
-      const n = extractFirstNumberFromResults(text);
-      if (Number.isInteger(n)) { adCount = n; status = 'success'; }
-    }
+    // ---- Primary strategy: wait for a heading containing "results"
+    // Facebook frequently renders the total in a heading element (role=heading)
+    await page
+      .waitForSelector('role=heading', { timeout: 20000 })
+      .catch(() => {});
 
-    // B) any element containing "[number] results"
-    if (status !== 'success') {
-      const anyResults = page.locator('text=/\\b\\d+\\s*results?\\b/i');
-      if (await anyResults.count()) {
-        const text = (await anyResults.first().innerText()).trim();
-        const n = extractFirstNumberFromResults(text);
-        if (Number.isInteger(n)) { adCount = n; status = 'success'; }
+    // Collect all candidate nodes that might contain "... results"
+    const candidateLocators = [
+      page.locator('role=heading').filter({ hasText: /results?/i }),
+      page.locator('text=/~?\\s*[\\d,]+\\s*results?/i') // any element with "~ 2,900 results"
+    ];
+
+    let bestNumber = null;
+
+    // Evaluate each candidate locator and pick the largest valid number
+    for (const loc of candidateLocators) {
+      const count = await loc.count();
+      for (let i = 0; i < count; i++) {
+        const txt = (await loc.nth(i).innerText().catch(() => '')).trim();
+        if (!txt) continue;
+        console.log(`[Facebook] Candidate text: "${txt}"`);
+        const n = extractFirstNumberFromResults(txt);
+        if (Number.isInteger(n)) {
+          if (bestNumber === null || n > bestNumber) bestNumber = n;
+        }
       }
     }
 
-    // C) fallback — scan body text
-    if (status !== 'success') {
-      const bodyText = await page.locator('body').innerText();
+    if (bestNumber !== null) {
+      adCount = bestNumber;
+      status = 'success';
+      console.log(`[Facebook] ✅ Parsed adCount = ${adCount}`);
+    } else {
+      // ---- Fallback: scan the whole body text (last resort)
+      console.log('[Facebook] ⚠️ No candidate matched; scanning body text…');
+      const bodyText = await page.locator('body').innerText().catch(() => '');
       const n = extractFirstNumberFromResults(bodyText);
       if (Number.isInteger(n)) {
-        adCount = n; status = 'success';
+        adCount = n;
+        status = 'success';
+        console.log(`[Facebook] ✅ Fallback body scan parsed adCount = ${adCount}`);
       } else if (/verify|unusual activity|blocked|forbidden|access denied|captcha/i.test(bodyText)) {
         status = 'blocked';
+        console.log('[Facebook] 🚫 Page indicates block/captcha.');
       } else {
         status = 'failed';
+        console.log('[Facebook] ❌ Could not parse a result count.');
       }
     }
   } catch (e) {
     status = 'error';
-    console.error('[Facebook] Error scraping:', e.message);
+    console.error('[Facebook] ❌ Error scraping:', e.message);
   }
 
   return { ad_count: adCount, status };

@@ -1,7 +1,7 @@
 /**
  * Google scraping logic using Playwright.
- * Dynamic selector strategy (no hardcoding brittle class names).
- * We aim to extract the number from text like: "0 ads"
+ * Detects text like "7 ads" from elements such as:
+ * <div class="ads-count ads-count-searchable _ngcontent-nun-21">7 ads</div>
  */
 
 async function randomHumanPause(page, min = 200, max = 900) {
@@ -16,52 +16,60 @@ function extractFirstNumber(text) {
 
 async function checkGoogle(page, url) {
   let adCount = 0;
-  let status = 'failed'; // start NOT success
+  let status = 'failed';
 
   try {
-    // Anti-bot-ish behavior
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
-    await page.setViewportSize({ width: 1280 + Math.floor(Math.random()*120), height: 900 + Math.floor(Math.random()*100) });
+    await page.setViewportSize({
+      width: 1280 + Math.floor(Math.random() * 120),
+      height: 900 + Math.floor(Math.random() * 100)
+    });
 
+    console.log(`[Google] Navigating to: ${url}`);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await randomHumanPause(page, 500, 1500);
+    await randomHumanPause(page, 800, 1600);
+    await page.mouse.wheel(0, 600 + Math.floor(Math.random() * 400));
 
-    // Scroll a bit to trigger dynamic rendering
-    await page.mouse.wheel(0, 500 + Math.floor(Math.random()*400));
-    await randomHumanPause(page, 400, 900);
+    // ✅ Strategy 1: wait for .ads-count element to appear (reliable for Ad Transparency Center)
+    await page.waitForSelector('.ads-count.ads-count-searchable', { timeout: 15000 }).catch(() => {});
 
-    // Strategy A: any element containing "[number] ads"
-    const locatorA = page.locator('text=/\\b\\d+\\s*ads?\\b/i');
-    if (await locatorA.count()) {
-      const text = (await locatorA.first().innerText()).trim();
-      const n = extractFirstNumber(text);
-      if (Number.isInteger(n)) { adCount = n; status = 'success'; }
-    }
+    const locator = page.locator('.ads-count.ads-count-searchable');
+    const count = await locator.count();
 
-    // Strategy B: class contains "ads-count", then read text
-    if (status !== 'success') {
-      const locatorB = page.locator('[class*=ads-count]');
-      if (await locatorB.count()) {
-        const text = (await locatorB.first().innerText()).trim();
+    console.log(`[Google] Found ${count} '.ads-count' element(s)`);
+
+    let bestNumber = null;
+    if (count > 0) {
+      for (let i = 0; i < count; i++) {
+        const text = (await locator.nth(i).innerText()).trim();
+        console.log(`[Google] ads-count[${i}] text: "${text}"`);
         const n = extractFirstNumber(text);
-        if (Number.isInteger(n)) { adCount = n; status = 'success'; }
+        if (Number.isInteger(n)) {
+          if (bestNumber === null || n > bestNumber) bestNumber = n;
+        }
       }
     }
 
-    // Strategy C: aria attributes or headings if UI changes
-    if (status !== 'success') {
-      const locatorC = page.locator('role=heading').filter({ hasText: /ads?/i });
-      if (await locatorC.count()) {
-        const text = (await locatorC.first().innerText()).trim();
-        const n = extractFirstNumber(text);
-        if (Number.isInteger(n)) { adCount = n; status = 'success'; }
+    if (bestNumber !== null) {
+      adCount = bestNumber;
+      status = 'success';
+      console.log(`[Google] ✅ Parsed adCount = ${adCount}`);
+    } else {
+      console.log('[Google] ⚠️ No valid ad count text found. Checking fallback patterns...');
+      // Fallbacks for dynamic UI
+      const altText = await page.locator('text=/\\b\\d+\\s*ads?\\b/i').first().innerText().catch(() => '');
+      const n = extractFirstNumber(altText);
+      if (Number.isInteger(n)) {
+        adCount = n;
+        status = 'success';
+        console.log(`[Google] ✅ Fallback text matched adCount = ${adCount}`);
       }
     }
 
-    // If still nothing, mark as blocked/failed based on page content
+    // Status refinement
     if (status !== 'success') {
-      const bodyText = await page.locator('body').innerText();
-      if (/verify|unusual traffic|blocked|forbidden|access denied|captcha/i.test(bodyText)) {
+      const body = await page.locator('body').innerText();
+      if (/verify|unusual traffic|blocked|forbidden|access denied|captcha/i.test(body)) {
         status = 'blocked';
       } else {
         status = 'failed';
@@ -69,7 +77,7 @@ async function checkGoogle(page, url) {
     }
   } catch (e) {
     status = 'error';
-    console.error('[Google] Error scraping:', e.message);
+    console.error('[Google] ❌ Error scraping:', e.message);
   }
 
   return { ad_count: adCount, status };

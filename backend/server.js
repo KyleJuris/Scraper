@@ -25,52 +25,61 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
  * 6) mark scrape_url.checked = true
  */
 async function runScrapeJob() {
-  console.log('[SCRAPER] Job starting…');
+  console.log('[SCRAPER] 🚀 Starting new scrape job...');
 
   // 1) Create job
+  console.log('[SCRAPER] Creating job record in scrape_jobs...');
   const { data: jobInsert, error: jobErr } = await supabase
     .from('scrape_jobs')
-    .insert([{ /* date_started defaults in DB */ }])
+    .insert([{}])
     .select()
     .single();
 
   if (jobErr) {
-    console.error('[SCRAPER] Failed to create job:', jobErr.message);
+    console.error('[SCRAPER] ❌ Failed to create job:', jobErr.message);
     return;
   }
-  const jobId = jobInsert.id;
 
-  // 2) Fetch URLs to check (you upload them manually)
+  const jobId = jobInsert.id;
+  console.log(`[SCRAPER] ✅ Job created with ID: ${jobId}`);
+
+  // 2) Fetch URLs
+  console.log('[SCRAPER] Fetching scrape_url entries...');
   const { data: urls, error: urlErr } = await supabase
     .from('scrape_url')
     .select('id, domain, facebook_url, google_url, checked')
     .order('created_at', { ascending: true });
 
   if (urlErr) {
-    console.error('[SCRAPER] Failed to fetch scrape_url:', urlErr.message);
+    console.error('[SCRAPER] ❌ Failed to fetch scrape_url:', urlErr.message);
     return;
   }
 
   if (!urls || urls.length === 0) {
-    console.log('[SCRAPER] No URLs found. Finishing job.');
+    console.log('[SCRAPER] ⚠️ No URLs found. Finishing job.');
     return;
   }
 
+  console.log(`[SCRAPER] Found ${urls.length} URLs to process.`);
   let totalAdCount = 0;
 
-  // 3) Playwright browser (single shared browser; one page per URL workflow)
+  // 3) Launch browser
+  console.log('[SCRAPER] Launching Playwright browser...');
   const { browser, context } = await createBrowser();
 
   try {
-    for (const row of urls) {
+    for (const [index, row] of urls.entries()) {
+      console.log(`\n[SCRAPER] 🕵️ Processing ${index + 1}/${urls.length}: ${row.domain}`);
+
       const { id: urlId, domain, facebook_url, google_url } = row;
 
-      // process Google
+      // Process Google
       if (google_url) {
+        console.log(`[SCRAPER][Google] Visiting ${google_url}`);
         const page = await context.newPage();
         const result = await checkGoogle(page, google_url);
         await page.close().catch(() => {});
-
+        console.log(`[SCRAPER][Google] Result for ${domain}:`, result);
         totalAdCount += Number(result.ad_count || 0);
 
         await supabase.from('scrape_results').insert([{
@@ -80,16 +89,15 @@ async function runScrapeJob() {
           ad_count: result.ad_count || 0,
           status: result.status || 'success'
         }]);
-        // jitter between requests
-        await wait(500 + Math.floor(Math.random() * 1200));
       }
 
-      // process Facebook
+      // Process Facebook
       if (facebook_url) {
+        console.log(`[SCRAPER][Facebook] Visiting ${facebook_url}`);
         const page = await context.newPage();
         const result = await checkFacebook(page, facebook_url);
         await page.close().catch(() => {});
-
+        console.log(`[SCRAPER][Facebook] Result for ${domain}:`, result);
         totalAdCount += Number(result.ad_count || 0);
 
         await supabase.from('scrape_results').insert([{
@@ -99,27 +107,27 @@ async function runScrapeJob() {
           ad_count: result.ad_count || 0,
           status: result.status || 'success'
         }]);
-        // jitter between requests
-        await wait(700 + Math.floor(Math.random() * 1500));
       }
 
-      // Mark URL as checked (doesn't block if one of the sources missing)
+      // Mark URL checked
       await supabase
         .from('scrape_url')
         .update({ checked: true, updated_at: new Date().toISOString() })
         .eq('id', urlId);
+
+      console.log(`[SCRAPER] ✅ Finished ${domain}`);
     }
   } catch (err) {
-    console.error('[SCRAPER] Unexpected error during run:', err);
+    console.error('[SCRAPER] 💥 Unexpected error during run:', err);
   } finally {
-    // 5) Update job total count
+    console.log(`[SCRAPER] 🧮 Updating total_ad_count: ${totalAdCount}`);
     await supabase
       .from('scrape_jobs')
       .update({ total_ad_count: totalAdCount })
       .eq('id', jobId);
 
     await browser.close().catch(() => {});
-    console.log('[SCRAPER] Job finished. total_ad_count =', totalAdCount);
+    console.log('[SCRAPER] ✅ Job completed and browser closed.');
   }
 }
 

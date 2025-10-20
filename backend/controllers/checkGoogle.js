@@ -1,18 +1,19 @@
 /**
- * Google Ads Transparency scraper.
- * Detects text like "7 ads" from:
- * <div class="ads-count ads-count-searchable _ngcontent-hzf-21">7 ads</div>
- * Includes timing, waiting, and multi-candidate checks.
+ * Google Ads Transparency scraper (JavaScript).
+ * Inspired by getAdCount.ts: resilient selector + visibility wait + fallback scan.
+ * Extracts numbers like "7 ads" from elements such as:
+ * <div class="ads-count ads-count-searchable ...">7 ads</div>
  */
 
-async function randomHumanPause(page, min = 200, max = 900) {
-  await page.waitForTimeout(min + Math.floor(Math.random() * (max - min)));
+async function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
 }
 
-function extractAdNumber(text) {
-  if (!text) return null;
-  const match = text.match(/(\d+)\s*ads?/i);
-  return match ? parseInt(match[1], 10) : null;
+function parseNumberFromAdsText(raw) {
+  if (!raw) return null;
+  const m = raw.match(/([\d,]+)\s*ads?/i);
+  if (!m) return null;
+  return parseInt(m[1].replace(/,/g, ''), 10);
 }
 
 async function checkGoogle(page, url) {
@@ -20,52 +21,66 @@ async function checkGoogle(page, url) {
   let status = 'failed';
 
   try {
-    console.log(`[Google] Navigating to: ${url}`);
+    console.log(`[Google] Navigating: ${url}`);
     await page.goto(url, { waitUntil: 'networkidle', timeout: 90000 });
+
+    // Nudge rendering & keep things human-ish
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
     await page.setViewportSize({ width: 1280, height: 900 });
+    await sleep(600);
+    await page.mouse.wheel(0, 500);
 
-    // Wait for ads-count to load (Angular renders this after a few seconds)
-    console.log('[Google] Waiting for ads-count element...');
-    await page.waitForSelector('div.ads-count.ads-count-searchable', { timeout: 20000 });
+    // Primary: semantic, multi-hint selector with text guard "ads"
+    // (mirrors the TS helper's :is(...) + hasText approach)
+    const primary = page.locator(
+      ':is([class*="ads-count"], [class*="ads-count-searchable"], [aria-label*="ads"], [role="status"])',
+      { hasText: /\bads?\b/i }
+    );
 
-    await randomHumanPause(page, 800, 1600);
-    await page.mouse.wheel(0, 600 + Math.floor(Math.random() * 300));
+    // Try to see at least one visible candidate
+    try {
+      await primary.first().waitFor({ state: 'visible', timeout: 15000 });
+    } catch (_) {
+      // visibility wait timed out; we'll still read whatever exists
+    }
 
-    const locators = page.locator('div.ads-count.ads-count-searchable');
-    const count = await locators.count();
-    console.log(`[Google] Found ${count} potential ads-count elements.`);
+    let rawText = null;
 
-    let bestNum = null;
-
-    for (let i = 0; i < count; i++) {
-      const text = (await locators.nth(i).innerText().catch(() => '')).trim();
-      console.log(`[Google] Element ${i} text: "${text}"`);
-      const n = extractAdNumber(text);
-      if (Number.isInteger(n)) {
-        if (bestNum === null || n > bestNum) bestNum = n;
+    const found = await primary.count();
+    console.log(`[Google] primary candidates: ${found}`);
+    if (found > 0) {
+      // read all candidates; pick the best number (handles transient "0 ads")
+      let best = null;
+      for (let i = 0; i < found; i++) {
+        const txt = (await primary.nth(i).innerText().catch(() => '') || '').trim();
+        console.log(`[Google] candidate[${i}] = "${txt}"`);
+        const n = parseNumberFromAdsText(txt);
+        if (Number.isInteger(n)) best = best === null ? n : Math.max(best, n);
+      }
+      if (best !== null) {
+        adCount = best;
+        status = 'success';
+        console.log(`[Google] ✅ parsed = ${adCount}`);
+      } else {
+        rawText = await primary.first().innerText().catch(() => null);
       }
     }
 
-    if (bestNum !== null) {
-      adCount = bestNum;
-      status = 'success';
-      console.log(`[Google] ✅ Parsed adCount = ${adCount}`);
-    } else {
-      // Fallback scan
-      console.log('[Google] ⚠️ No valid element matched; scanning all text for "\\d+ ads"...');
-      const bodyText = await page.locator('body').innerText().catch(() => '');
-      const n = extractAdNumber(bodyText);
+    // Fallback: scan full body text for “\d+ ads”
+    if (status !== 'success') {
+      console.log('[Google] Fallback: scanning body text for "(\\d+) ads"');
+      const bodyText = await page.textContent('body').catch(() => '') || '';
+      const n = parseNumberFromAdsText(bodyText);
       if (Number.isInteger(n)) {
         adCount = n;
         status = 'success';
-        console.log(`[Google] ✅ Fallback text match = ${adCount}`);
-      } else if (/blocked|captcha|verify|unusual traffic/i.test(bodyText)) {
+        console.log(`[Google] ✅ fallback parsed = ${adCount}`);
+      } else if (/blocked|captcha|verify|unusual traffic|forbidden|access denied/i.test(bodyText)) {
         status = 'blocked';
-        console.log('[Google] 🚫 Access blocked or CAPTCHA detected.');
+        console.log('[Google] 🚫 blocked/captcha detected');
       } else {
         status = 'failed';
-        console.log('[Google] ❌ Could not parse ad count.');
+        console.log('[Google] ❌ could not parse ad count');
       }
     }
   } catch (err) {

@@ -1,0 +1,28 @@
+{
+  "name": "urlscraper-backend",
+  "version": "1.0.0",
+  "description": "Backend API for URL scraper extracting data from Facebook and Google ad transparency URLs",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "scrape": "node src/scraper.js",
+    "extract-cookies": "node src/extractCookies.js"
+  },
+  "keywords": ["scraper", "facebook", "google", "ads", "transparency"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "dotenv": "^16.3.1",
+    "@supabase/supabase-js": "^2.38.4",
+    "playwright": "^1.40.1",
+    "cheerio": "^1.0.0-rc.12",
+    "axios": "^1.6.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

@@ -1,0 +1,33 @@
+[
+  {
+    "name": "NID",
+    "value": "your_nid_token_here",
+    "domain": ".google.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "1P_JAR",
+    "value": "your_1p_jar_token_here",
+    "domain": ".google.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "SID",
+    "value": "your_sid_token_here",
+    "domain": ".google.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  }
+]
+

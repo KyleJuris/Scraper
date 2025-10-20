@@ -1,0 +1,23 @@
+[
+  {
+    "name": "session_id",
+    "value": "example_session_value",
+    "domain": ".facebook.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "consent_cookie",
+    "value": "accepted",
+    "domain": ".facebook.com", 
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  }
+]
+

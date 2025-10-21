@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const scraperRoutes = require('./routes/scraper');
 const supabase = require('./lib/supabaseClient');
